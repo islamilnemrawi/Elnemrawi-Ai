@@ -17,33 +17,21 @@ jobs:
 
     steps:
 
-      # ==========================================
-      # 1. تحميل المستودع
-      # ==========================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ==========================================
-      # 2. Java
-      # ==========================================
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # ==========================================
-      # 3. Android SDK
-      # ==========================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
 
-      # ==========================================
-      # 4. تثبيت Android SDK المطلوبة
-      # ==========================================
-      - name: Install Android SDK packages
+      - name: Install Android SDK
         shell: bash
         run: |
           set -e
@@ -55,10 +43,7 @@ jobs:
             "build-tools;35.0.0" \
             "platform-tools"
 
-      # ==========================================
-      # 5. البحث عن ZIP
-      # ==========================================
-      - name: Find Project ZIP
+      - name: Find ZIP
         shell: bash
         run: |
           set -e
@@ -71,50 +56,28 @@ jobs:
             | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "=========================================="
-            echo "ERROR: No ZIP file found."
-            echo "=========================================="
-            echo ""
-            echo "Files currently inside repository:"
-            find . -maxdepth 3 -type f | sort
+            echo "ERROR: ZIP file not found."
             exit 1
           fi
 
-          echo "=========================================="
-          echo "ZIP FOUND"
-          echo "=========================================="
-          echo "$ZIP_FILE"
-
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      # ==========================================
-      # 6. فك ZIP
-      # ==========================================
-      - name: Extract Project ZIP
+          echo "ZIP found:"
+          echo "$ZIP_FILE"
+
+      - name: Extract ZIP
         shell: bash
         run: |
           set -e
 
           rm -rf extracted_project
-
           mkdir -p extracted_project
 
           unzip -q "$ZIP_FILE" -d extracted_project
 
-          echo "=========================================="
-          echo "ZIP EXTRACTED SUCCESSFULLY"
-          echo "=========================================="
+          echo "ZIP extracted."
 
-          find extracted_project \
-            -maxdepth 4 \
-            -type f \
-            | sort \
-            | head -300
-
-      # ==========================================
-      # 7. اكتشاف مشروع Android
-      # ==========================================
-      - name: Locate Android Project
+      - name: Locate Android project
         shell: bash
         run: |
           set -e
@@ -129,90 +92,79 @@ jobs:
             | head -n 1)
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "=========================================="
-            echo "ERROR: Android Gradle project not found."
-            echo "=========================================="
-
-            echo ""
-            echo "Extracted project structure:"
-            find extracted_project \
-              -maxdepth 5 \
-              -type f \
-              | sort \
-              | head -500
-
+            echo "ERROR: settings.gradle was not found."
+            find extracted_project -maxdepth 5 -type f | sort
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
 
-          echo "=========================================="
-          echo "ANDROID PROJECT FOUND"
-          echo "=========================================="
-          echo "$PROJECT_DIR"
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      # ==========================================
-      # 8. فحص ملفات المشروع
-      # ==========================================
-      - name: Inspect Android Project
-        shell: bash
-        run: |
-          set -e
-
-          echo "=========================================="
-          echo "PROJECT DIRECTORY"
-          echo "=========================================="
-
+          echo "Android project:"
           echo "$PROJECT_DIR"
 
-          echo ""
-          echo "=========================================="
-          echo "PROJECT FILES"
-          echo "=========================================="
-
-          find "$PROJECT_DIR" \
-            -maxdepth 4 \
-            -type f \
-            | sort \
-            | head -500
-
-      # ==========================================
-      # 9. التأكد من Gradle Wrapper
-      # ==========================================
-      - name: Verify Gradle Wrapper
+      - name: Inspect Gradle files
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          echo "Checking Gradle Wrapper..."
+          echo "================================"
+          echo "Gradle files"
+          echo "================================"
 
-          if [ ! -f "gradlew" ]; then
-            echo "=========================================="
-            echo "ERROR: gradlew is missing."
-            echo "=========================================="
-            exit 1
+          find . \
+            -maxdepth 4 \
+            -type f \
+            \( \
+              -name "settings.gradle*" \
+              -o \
+              -name "build.gradle*" \
+              -o \
+              -name "gradle.properties" \
+              -o \
+              -name "gradle-wrapper.properties" \
+            \) \
+            -print
+
+          echo ""
+          echo "================================"
+          echo "Project root"
+          echo "================================"
+
+          ls -la
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Determine Gradle command
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            echo "GRADLE_CMD=./gradlew" >> "$GITHUB_ENV"
+            echo "Using project Gradle Wrapper."
+          else
+            echo "GRADLE_CMD=gradle" >> "$GITHUB_ENV"
+            echo "Gradle Wrapper is missing."
+            echo "Using GitHub-hosted Gradle."
           fi
 
-          chmod +x gradlew
+      - name: Show Gradle version
+        shell: bash
+        run: |
+          set -e
 
-          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "=========================================="
-            echo "ERROR: gradle-wrapper.jar is missing."
-            echo "=========================================="
-            exit 1
-          fi
+          cd "$PROJECT_DIR"
 
-          echo "Gradle Wrapper found."
+          $GRADLE_CMD --version
 
-          ./gradlew --version
-
-      # ==========================================
-      # 10. Compile Kotlin
-      # ==========================================
       - name: Compile Debug
         shell: bash
         run: |
@@ -220,18 +172,11 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "=========================================="
-          echo "COMPILE DEBUG"
-          echo "=========================================="
-
-          ./gradlew \
+          $GRADLE_CMD \
             :app:compileDebugKotlin \
             --stacktrace \
             --no-daemon
 
-      # ==========================================
-      # 11. Unit Tests
-      # ==========================================
       - name: Run Unit Tests
         shell: bash
         run: |
@@ -239,18 +184,11 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "=========================================="
-          echo "RUNNING UNIT TESTS"
-          echo "=========================================="
-
-          ./gradlew \
+          $GRADLE_CMD \
             :app:testDebugUnitTest \
             --stacktrace \
             --no-daemon
 
-      # ==========================================
-      # 12. Build APK
-      # ==========================================
       - name: Build Debug APK
         shell: bash
         run: |
@@ -258,19 +196,12 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "=========================================="
-          echo "BUILDING DEBUG APK"
-          echo "=========================================="
-
-          ./gradlew \
+          $GRADLE_CMD \
             :app:assembleDebug \
             --stacktrace \
             --no-daemon
 
-      # ==========================================
-      # 13. التحقق من APK
-      # ==========================================
-      - name: Verify APK
+      - name: Find APK
         shell: bash
         run: |
           set -e
@@ -281,33 +212,22 @@ jobs:
             | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "=========================================="
             echo "ERROR: APK was not generated."
-            echo "=========================================="
             exit 1
           fi
 
-          echo "=========================================="
-          echo "APK GENERATED SUCCESSFULLY"
-          echo "=========================================="
-
-          ls -lh "$APK"
-
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
-      # ==========================================
-      # 14. رفع APK
-      # ==========================================
-      - name: Upload Debug APK
+          echo "APK generated:"
+          ls -lh "$APK"
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Elnemrawi-AI-debug-apk
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
 
-      # ==========================================
-      # 15. رفع تقارير الاختبارات
-      # ==========================================
       - name: Upload Test Reports
         if: always()
         uses: actions/upload-artifact@v4
