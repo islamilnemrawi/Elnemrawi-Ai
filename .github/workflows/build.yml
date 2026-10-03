@@ -1,8 +1,7 @@
-name: Nemrawy AI - Build & Test
+name: Nemrawy AI - Build APK
 
 on:
   workflow_dispatch:
-
   push:
     branches:
       - main
@@ -12,18 +11,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: nemrawy-ai-${{ github.workflow }}-${{ github.ref }}
+  group: nemrawy-ai-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build Nemrawy AI
+    name: Build Nemrawy AI APK
     runs-on: ubuntu-latest
 
     steps:
 
       # ============================================================
-      # 1. Checkout repository
+      # 1. Checkout
       # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,23 +30,26 @@ jobs:
           fetch-depth: 1
 
       # ============================================================
-      # 2. Setup Java 21
-      # Required for Robolectric with Android SDK 36
+      # 2. Java 21
       # ============================================================
       - name: Setup JDK 21
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: "21"
+          cache: gradle
 
       # ============================================================
-      # 3. Setup Android SDK
+      # 3. Android SDK
       # ============================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
       - name: Install Android SDK
+        shell: bash
         run: |
+          set -euo pipefail
+
           yes | sdkmanager --licenses || true
 
           sdkmanager \
@@ -56,53 +58,59 @@ jobs:
             "build-tools;36.0.0"
 
       # ============================================================
-      # 4. Find uploaded ZIP
+      # 4. Locate latest Nemrawy ZIP
       # ============================================================
-      - name: Find project ZIP
+      - name: Locate Nemrawy AI ZIP
         id: zip
         shell: bash
         run: |
-          echo "Searching for Nemrawy AI ZIP..."
+          set -euo pipefail
 
           ZIP_FILE=$(find . \
-            -maxdepth 2 \
+            -maxdepth 3 \
             -type f \
             -name "*.zip" \
-            -print -quit)
+            ! -path "./.git/*" \
+            -print \
+            | sort \
+            | tail -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file was found."
-            echo ""
-            echo "Repository contents:"
-            find . -maxdepth 4 -type f | sort
+            echo "ERROR: No Nemrawy AI ZIP file found."
+            echo "Files in repository:"
+            find . -maxdepth 3 -type f | sort
             exit 1
           fi
 
-          echo "Found ZIP:"
+          echo "Using ZIP:"
           echo "$ZIP_FILE"
 
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
       # ============================================================
       # 5. Extract project
-      #
-      # This only extracts the ZIP.
-      # No project files are deleted or modified.
       # ============================================================
       - name: Extract Nemrawy AI project
         shell: bash
         run: |
+          set -euo pipefail
+
+          rm -rf extracted_project
           mkdir -p extracted_project
 
           unzip -q \
             "${{ steps.zip.outputs.zip_file }}" \
             -d extracted_project
 
+          chmod -R u+rwX extracted_project
+
           echo "Project extracted successfully."
 
-          echo ""
-          echo "Extracted project:"
-          find extracted_project -maxdepth 4 -type f | sort | head -500
+          find extracted_project \
+            -maxdepth 5 \
+            -type f \
+            | sort \
+            | head -500
 
       # ============================================================
       # 6. Locate Gradle project
@@ -111,7 +119,7 @@ jobs:
         id: project
         shell: bash
         run: |
-          echo "Searching for Gradle settings..."
+          set -euo pipefail
 
           SETTINGS_FILE=$(find extracted_project \
             -type f \
@@ -120,100 +128,94 @@ jobs:
               -o \
               -name "settings.gradle.kts" \
             \) \
-            -print -quit)
+            -print \
+            -quit)
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: No settings.gradle or settings.gradle.kts found."
-
-            echo ""
-            echo "Extracted files:"
+            echo "ERROR: settings.gradle(.kts) not found."
             find extracted_project -maxdepth 6 -type f | sort
-
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
 
-          echo ""
-          echo "Gradle settings:"
-          echo "$SETTINGS_FILE"
+          if [ ! -d "$PROJECT_DIR/app" ]; then
+            echo "ERROR: Android app module was not found."
+            echo "Project directory: $PROJECT_DIR"
+            find "$PROJECT_DIR" -maxdepth 3 -type d | sort
+            exit 1
+          fi
 
-          echo ""
-          echo "Project directory:"
+          echo "Gradle project:"
           echo "$PROJECT_DIR"
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
       # ============================================================
-      # 7. Inspect project
-      # ============================================================
-      - name: Inspect Nemrawy AI project
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        run: |
-          echo "=========================================="
-          echo "NEMRAWY AI PROJECT"
-          echo "=========================================="
-
-          echo ""
-          echo "Project path:"
-          pwd
-
-          echo ""
-          echo "Gradle files:"
-          find . -type f \
-            \( \
-              -name "settings.gradle" \
-              -o \
-              -name "settings.gradle.kts" \
-              -o \
-              -name "build.gradle" \
-              -o \
-              -name "build.gradle.kts" \
-              -o \
-              -name "gradle-wrapper.properties" \
-              -o \
-              -name "*.versions.toml" \
-            \) \
-            | sort
-
-      # ============================================================
-      # 8. Setup Gradle 9.3.1
+      # 7. Setup Gradle 9.3.1
       # ============================================================
       - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '9.3.1'
+          gradle-version: "9.3.1"
 
       # ============================================================
-      # 9. Verify environment
+      # 8. Verify environment
       # ============================================================
       - name: Verify build environment
         working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
         run: |
-          echo "=========================================="
-          echo "JAVA"
-          echo "=========================================="
+          set -euo pipefail
+
+          echo "===== JAVA ====="
           java -version
 
-          echo ""
-          echo "=========================================="
-          echo "GRADLE"
-          echo "=========================================="
+          echo "===== GRADLE ====="
           gradle --version
 
-          echo ""
-          echo "=========================================="
-          echo "ANDROID SDK"
-          echo "=========================================="
+          echo "===== ANDROID SDK ====="
           sdkmanager --list_installed
+
+          echo "===== PROJECT ====="
+          pwd
+          ls -la
+
+      # ============================================================
+      # 9. Create debug keystore if missing
+      # ============================================================
+      - name: Prepare debug signing
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "debug.keystore" ]; then
+            keytool -genkeypair \
+              -v \
+              -keystore debug.keystore \
+              -alias androiddebugkey \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass android \
+              -keypass android \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          echo "Debug signing configuration ready."
 
       # ============================================================
       # 10. Compile Kotlin
       # ============================================================
       - name: Compile Debug Kotlin
         working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
         run: |
-          gradle :app:compileDebugKotlin \
+          set -euo pipefail
+
+          gradle \
+            :app:compileDebugKotlin \
             --stacktrace \
             --no-daemon
 
@@ -222,18 +224,26 @@ jobs:
       # ============================================================
       - name: Run Unit Tests
         working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
         run: |
-          gradle :app:testDebugUnitTest \
+          set -euo pipefail
+
+          gradle \
+            :app:testDebugUnitTest \
             --stacktrace \
             --no-daemon
 
       # ============================================================
-      # 12. Build Debug APK
+      # 12. Build APK
       # ============================================================
       - name: Build Debug APK
         working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
         run: |
-          gradle :app:assembleDebug \
+          set -euo pipefail
+
+          gradle \
+            :app:assembleDebug \
             --stacktrace \
             --no-daemon
 
@@ -244,51 +254,54 @@ jobs:
         working-directory: ${{ steps.project.outputs.project_dir }}
         shell: bash
         run: |
-          echo "=========================================="
-          echo "GENERATED APK"
-          echo "=========================================="
+          set -euo pipefail
 
-          find app/build/outputs/apk \
+          APK_DIR="app/build/outputs/apk/debug"
+
+          if [ ! -d "$APK_DIR" ]; then
+            echo "ERROR: APK output directory was not created."
+            exit 1
+          fi
+
+          APK_COUNT=$(find "$APK_DIR" \
+            -type f \
+            -name "*.apk" \
+            | wc -l)
+
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "ERROR: No APK was generated."
+            find app/build/outputs -type f | sort || true
+            exit 1
+          fi
+
+          echo "======================================"
+          echo "Nemrawy AI APK generated successfully"
+          echo "======================================"
+
+          find "$APK_DIR" \
             -type f \
             -name "*.apk" \
             -print
 
-          APK_COUNT=$(find app/build/outputs/apk \
-            -type f \
-            -name "*.apk" | wc -l)
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERROR: APK was not generated."
-            exit 1
-          fi
-
-          echo ""
-          echo "APK generated successfully."
-
       # ============================================================
-      # 14. APK information
+      # 14. APK information + checksum
       # ============================================================
-      - name: APK information
+      - name: APK Information
         working-directory: ${{ steps.project.outputs.project_dir }}
         shell: bash
         run: |
+          set -euo pipefail
+
           for APK in app/build/outputs/apk/debug/*.apk; do
-            echo "=========================================="
-            echo "APK FILE"
-            echo "=========================================="
-
-            echo "Path:"
-            echo "$APK"
-
-            echo ""
+            echo "--------------------------------------"
+            echo "APK: $APK"
             echo "Size:"
             du -h "$APK"
 
-            echo ""
             echo "SHA-256:"
             sha256sum "$APK"
 
-            echo ""
+            echo "--------------------------------------"
           done
 
       # ============================================================
@@ -298,15 +311,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Nemrawy-AI-Debug-APK
-          path: |
-            ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/*.apk
+          path: ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
       # ============================================================
-      # 16. Upload test reports
+      # 16. Upload Unit Test Reports
       # ============================================================
-      - name: Upload test reports
+      - name: Upload Test Reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -315,12 +327,12 @@ jobs:
             ${{ steps.project.outputs.project_dir }}/app/build/reports/tests/**
             ${{ steps.project.outputs.project_dir }}/app/build/test-results/**
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 30
 
       # ============================================================
-      # 17. Upload build reports
+      # 17. Upload Build Reports
       # ============================================================
-      - name: Upload build reports
+      - name: Upload Build Reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -328,4 +340,4 @@ jobs:
           path: |
             ${{ steps.project.outputs.project_dir }}/app/build/reports/**
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 30
