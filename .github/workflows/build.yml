@@ -1,14 +1,9 @@
-name: Nemrawy AI - Build, Test & APK
+name: Nemrawy AI - Build & Test
 
 on:
   workflow_dispatch:
 
   push:
-    branches:
-      - main
-      - master
-
-  pull_request:
     branches:
       - main
       - master
@@ -30,24 +25,22 @@ jobs:
       # ============================================================
       # 1. Checkout
       # ============================================================
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       # ============================================================
-      # 2. Java 17
-      # AGP 9.1.x compatible
+      # 2. Setup JDK 17
       # ============================================================
       - name: Setup JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       # ============================================================
-      # 3. Android SDK
+      # 3. Setup Android SDK
       # ============================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
@@ -62,96 +55,155 @@ jobs:
             "build-tools;36.0.0"
 
       # ============================================================
-      # 4. Detect project structure
+      # 4. Locate Android project
+      #    IMPORTANT:
+      #    This only detects the project.
+      #    It does NOT move/delete/modify any files.
+      # ============================================================
+      - name: Locate Android project
+        id: project
+        shell: bash
+        run: |
+          echo "Searching for settings.gradle / settings.gradle.kts..."
+
+          SETTINGS_FILE=$(find . \
+            -type f \
+            \( \
+              -name "settings.gradle" \
+              -o \
+              -name "settings.gradle.kts" \
+            \) \
+            -print -quit)
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERROR: No Gradle settings file was found."
+            echo ""
+            echo "Repository contents:"
+            find . -maxdepth 4 -type f | sort
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+
+          echo "Gradle settings file:"
+          echo "$SETTINGS_FILE"
+
+          echo "Android project directory:"
+          echo "$PROJECT_DIR"
+
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      # ============================================================
+      # 5. Show project structure
       # ============================================================
       - name: Inspect project
-        shell: bash
+        working-directory: ${{ steps.project.outputs.project_dir }}
         run: |
           echo "=========================================="
           echo "Nemrawy AI Project"
           echo "=========================================="
 
-          echo "Working directory:"
+          echo "Project directory:"
           pwd
 
           echo ""
-          echo "Root files:"
-          find . -maxdepth 2 -type f | sort | head -300
-
-          echo ""
           echo "Gradle files:"
-          find . -type f \( \
-            -name "build.gradle" \
-            -o -name "build.gradle.kts" \
-            -o -name "settings.gradle" \
-            -o -name "settings.gradle.kts" \
-          \) | sort
+          find . -type f \
+            \( \
+              -name "settings.gradle" \
+              -o \
+              -name "settings.gradle.kts" \
+              -o \
+              -name "build.gradle" \
+              -o \
+              -name "build.gradle.kts" \
+              -o \
+              -name "gradle-wrapper.properties" \
+              -o \
+              -name "*.versions.toml" \
+            \) \
+            | sort
 
       # ============================================================
-      # 5. Setup Gradle
+      # 6. Setup Gradle
       # ============================================================
       - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
-          cache-read-only: false
 
       # ============================================================
-      # 6. Verify Gradle / Java / Android
+      # 7. Verify environment
       # ============================================================
       - name: Verify build environment
+        working-directory: ${{ steps.project.outputs.project_dir }}
         run: |
-          echo "Java:"
+          echo "=========================================="
+          echo "Java"
+          echo "=========================================="
           java -version
 
           echo ""
-          echo "Gradle:"
+          echo "=========================================="
+          echo "Gradle"
+          echo "=========================================="
           gradle --version
 
           echo ""
-          echo "Android SDK:"
+          echo "=========================================="
+          echo "Android SDK"
+          echo "=========================================="
           sdkmanager --list_installed
 
       # ============================================================
-      # 7. Compile Kotlin
+      # 8. Compile Kotlin
       # ============================================================
       - name: Compile Debug Kotlin
+        working-directory: ${{ steps.project.outputs.project_dir }}
         run: |
           gradle :app:compileDebugKotlin \
             --stacktrace \
             --no-daemon
 
       # ============================================================
-      # 8. Unit Tests
+      # 9. Unit tests
       # ============================================================
       - name: Run unit tests
+        working-directory: ${{ steps.project.outputs.project_dir }}
         run: |
           gradle :app:testDebugUnitTest \
             --stacktrace \
             --no-daemon
 
       # ============================================================
-      # 9. Assemble Debug APK
+      # 10. Build APK
       # ============================================================
       - name: Build Debug APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
         run: |
           gradle :app:assembleDebug \
             --stacktrace \
             --no-daemon
 
       # ============================================================
-      # 10. Verify APK exists
+      # 11. Verify APK
       # ============================================================
       - name: Verify APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
         shell: bash
         run: |
           echo "=========================================="
-          echo "Generated APK files"
+          echo "Generated APK"
           echo "=========================================="
 
-          find app/build/outputs/apk -type f -name "*.apk" -print
+          find app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print
 
-          APK_COUNT=$(find app/build/outputs/apk -type f -name "*.apk" | wc -l)
+          APK_COUNT=$(find app/build/outputs/apk \
+            -type f \
+            -name "*.apk" | wc -l)
 
           if [ "$APK_COUNT" -eq 0 ]; then
             echo "ERROR: No APK was generated."
@@ -162,10 +214,10 @@ jobs:
           echo "APK generated successfully."
 
       # ============================================================
-      # 11. APK information
+      # 12. APK SHA-256
       # ============================================================
-      - name: APK information
-        shell: bash
+      - name: Generate APK checksum
+        working-directory: ${{ steps.project.outputs.project_dir }}
         run: |
           for APK in app/build/outputs/apk/debug/*.apk; do
             echo "=========================================="
@@ -174,22 +226,22 @@ jobs:
             du -h "$APK"
             echo "SHA-256:"
             sha256sum "$APK"
-            echo "=========================================="
           done
 
       # ============================================================
-      # 12. Upload APK
+      # 13. Upload APK
       # ============================================================
       - name: Upload Nemrawy AI APK
         uses: actions/upload-artifact@v4
         with:
           name: Nemrawy-AI-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: |
+            ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
 
       # ============================================================
-      # 13. Upload test reports
+      # 14. Upload test reports
       # ============================================================
       - name: Upload test reports
         if: always()
@@ -197,13 +249,13 @@ jobs:
         with:
           name: Nemrawy-AI-Test-Reports
           path: |
-            app/build/reports/tests/**
-            app/build/test-results/**
+            ${{ steps.project.outputs.project_dir }}/app/build/reports/tests/**
+            ${{ steps.project.outputs.project_dir }}/app/build/test-results/**
           if-no-files-found: ignore
           retention-days: 14
 
       # ============================================================
-      # 14. Upload build reports
+      # 15. Upload build reports
       # ============================================================
       - name: Upload build reports
         if: always()
@@ -211,6 +263,6 @@ jobs:
         with:
           name: Nemrawy-AI-Build-Reports
           path: |
-            app/build/reports/**
+            ${{ steps.project.outputs.project_dir }}/app/build/reports/**
           if-no-files-found: ignore
           retention-days: 14
