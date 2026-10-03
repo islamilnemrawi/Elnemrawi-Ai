@@ -31,13 +31,14 @@ jobs:
           fetch-depth: 1
 
       # ============================================================
-      # 2. Setup Java 17
+      # 2. Setup Java 21
+      # Required for Robolectric with Android SDK 36
       # ============================================================
-      - name: Setup JDK 17
+      - name: Setup JDK 21
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       # ============================================================
       # 3. Setup Android SDK
@@ -55,7 +56,7 @@ jobs:
             "build-tools;36.0.0"
 
       # ============================================================
-      # 4. Find the uploaded ZIP
+      # 4. Find uploaded ZIP
       # ============================================================
       - name: Find project ZIP
         id: zip
@@ -63,13 +64,17 @@ jobs:
         run: |
           echo "Searching for Nemrawy AI ZIP..."
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" -print -quit)
+          ZIP_FILE=$(find . \
+            -maxdepth 2 \
+            -type f \
+            -name "*.zip" \
+            -print -quit)
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: No ZIP file was found."
             echo ""
             echo "Repository contents:"
-            find . -maxdepth 3 -type f | sort
+            find . -maxdepth 4 -type f | sort
             exit 1
           fi
 
@@ -81,9 +86,8 @@ jobs:
       # ============================================================
       # 5. Extract project
       #
-      # IMPORTANT:
       # This only extracts the ZIP.
-      # It does NOT delete or modify anything inside the ZIP.
+      # No project files are deleted or modified.
       # ============================================================
       - name: Extract Nemrawy AI project
         shell: bash
@@ -97,7 +101,7 @@ jobs:
           echo "Project extracted successfully."
 
           echo ""
-          echo "Extracted structure:"
+          echo "Extracted project:"
           find extracted_project -maxdepth 4 -type f | sort | head -500
 
       # ============================================================
@@ -107,7 +111,7 @@ jobs:
         id: project
         shell: bash
         run: |
-          echo "Searching extracted project for Gradle settings..."
+          echo "Searching for Gradle settings..."
 
           SETTINGS_FILE=$(find extracted_project \
             -type f \
@@ -269,7 +273,6 @@ jobs:
         shell: bash
         run: |
           for APK in app/build/outputs/apk/debug/*.apk; do
-
             echo "=========================================="
             echo "APK FILE"
             echo "=========================================="
@@ -301,7 +304,7 @@ jobs:
           retention-days: 14
 
       # ============================================================
-      # 16. Upload Unit Test Reports
+      # 16. Upload test reports
       # ============================================================
       - name: Upload test reports
         if: always()
@@ -315,7 +318,7 @@ jobs:
           retention-days: 14
 
       # ============================================================
-      # 17. Upload Build Reports
+      # 17. Upload build reports
       # ============================================================
       - name: Upload build reports
         if: always()
